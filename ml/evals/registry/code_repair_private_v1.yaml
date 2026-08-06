@@ -1,0 +1,34 @@
+# Private code-repair eval. Full promotion gate:
+# statistically-sized, paired vs. the current prod model, strict safety
+#
+# Dataset URI uses ${DATASETS_BUCKET} for env-aware resolution:
+# - local:   kairo-cloud-local-datasets (MiniStack)
+# - dev:     kairo-cloud-dev-datasets
+# - staging: kairo-cloud-staging-datasets
+# - prod:    kairo-cloud-prod-datasets
+id: code_repair_private_v1
+name: Private Code Repair Eval V1
+type: coding
+visibility: private
+dataset_uri: s3://${DATASETS_BUCKET}/evals/code_repair_private_v1.jsonl
+runner: code_repair
+scorer: hidden_tests
+timeout_seconds: 1800
+network_policy: restricted
+git_history_policy: reinitialized
+metrics:
+  - pass_rate
+  - regression_rate
+  - tool_calls
+  - latency
+  - cost_usd
+promotion_gate:
+  min_pass_rate: 0.72
+  baseline_model: reasoner-prod
+  comparison: paired
+  significance_level: 0.05
+  min_detectable_effect: 0.01
+  min_n: 400
+  max_safety_regression: 0.005
+  max_cost_increase: 0.15
+  max_latency_p99_ms: 30000

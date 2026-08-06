@@ -1,0 +1,30 @@
+# Smoke suite: <5 min, tiny, runs on every deploy and
+# every online-RL cycle. NOT a promotion gate on its own, it is the fast health
+# check that unblocks the per-cycle gate for the real-time RL loop
+id: smoke_v1
+name: Smoke Suite V1
+type: mixed
+visibility: private
+dataset_uri: ml/evals/datasets/smoke_v1.jsonl
+runner: smoke
+scorer: contains
+timeout_seconds: 300
+network_policy: restricted
+git_history_policy: reinitialized
+metrics:
+  - pass_rate
+  - p50_latency
+  - p99_latency
+  - cost_per_1k_requests
+promotion_gate:
+  min_pass_rate: 0.6
+  baseline_model: null
+  comparison: unpaired
+  significance_level: 0.05
+  # MDE 0 → size on min_n only. The smoke suite is a fast health check, not the
+  # statistical promotion gate; the full private suites (e.g. code_repair_v1)
+  # carry a real MDE and larger n
+  min_detectable_effect: 0.0
+  min_n: 8
+  max_safety_regression: 0.0
+  max_cost_increase: 0.25
