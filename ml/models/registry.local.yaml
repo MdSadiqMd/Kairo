@@ -1,0 +1,34 @@
+# Local model registry for development
+# In production this data lives in DynamoDB and `deployable` is flipped True
+# only by the promotion gate. Endpoints are in-cluster ClusterIP URLs
+models:
+  - name: fast
+    role: fast
+    version: 2026-07-11-001
+    endpoint: http://vllm-fast.kairo.svc.cluster.local:8000
+    served_model_id: fast
+    max_model_len: 4096
+    replicas: 1
+    precision: fp32
+    deployable: true
+
+  - name: reasoner
+    role: reasoner
+    version: 2026-07-11-001
+    endpoint: http://vllm-reasoner.kairo.svc.cluster.local:8000
+    served_model_id: reasoner
+    max_model_len: 4096
+    replicas: 1
+    precision: fp32
+    deployable: true
+
+  - name: bge-reranker
+    role: verifier
+    version: 2026-07-11-001
+    endpoint: http://vllm-verifier.kairo.svc.cluster.local:8000
+    # vLLM serves the model with this name (SERVED_MODEL_NAME env var)
+    served_model_id: kairo-verifier
+    max_model_len: 8192
+    replicas: 1
+    precision: fp16
+    deployable: true

@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://Kairo/model_manifest.schema.json",
+  "title": "configured model model deployment manifest",
+  "description": "Declares how a configured model model is served: source, precision, VRAM budget, parallelism, and role. Pinned HF revision makes deployments immutable and reproducible.",
+  "type": "object",
+  "required": [
+    "name",
+    "role",
+    "model_id",
+    "revision",
+    "precision",
+    "serving"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Logical name exposed to clients"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "reasoner",
+        "verifier",
+        "safety",
+        "draft"
+      ]
+    },
+    "model_id": {
+      "type": "string",
+      "description": "Hugging Face repo id"
+    },
+    "revision": {
+      "type": "string",
+      "description": "Pinned HF commit SHA (immutable)"
+    },
+    "precision": {
+      "type": "string",
+      "enum": [
+        "bf16",
+        "fp16",
+        "fp8",
+        "int8",
+        "awq"
+      ]
+    },
+    "full_params": {
+      "type": "string"
+    },
+    "active_params": {
+      "type": "string"
+    },
+    "serving": {
+      "type": "object",
+      "required": [
+        "engine",
+        "tensor_parallel_size",
+        "max_model_len",
+        "instance_type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "type": "string",
+          "enum": [
+            "vllm",
+            "sglang"
+          ]
+        },
+        "tensor_parallel_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_model_len": {
+          "type": "integer",
+          "minimum": 512
+        },
+        "instance_type": {
+          "type": "string"
+        },
+        "gpus_per_node": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kv_cache_dtype": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "fp8",
+            "int8"
+          ]
+        },
+        "extra_args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "vram_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "weights_gb": {
+          "type": "number"
+        },
+        "min_gpus": {
+          "type": "integer"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

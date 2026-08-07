@@ -1,0 +1,8 @@
+schema_version: 1
+name: reasoner-moe
+role: reasoner
+model_config_ref: config/models.json#/profiles/prod/models/reasoner
+deployment:
+  tensor_parallel_size: 4
+  max_model_len: 16384
+  quantization: fp8
