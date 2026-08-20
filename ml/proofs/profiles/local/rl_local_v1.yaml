@@ -1,0 +1,4 @@
+name: rl_local_v1
+backends:
+  - hash-commit
+risc0_mode: dev

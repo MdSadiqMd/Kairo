@@ -1,0 +1,5 @@
+name: rl_prod_v1
+backends:
+  - hash-commit
+  - risc0
+risc0_mode: prod
