@@ -1,0 +1,10 @@
+{"id": "smoke-001", "prompt": "What is the capital of France? Answer with just the city name.", "expected": "Paris", "scorer": "contains"}
+{"id": "smoke-002", "prompt": "Compute 17 * 23. Give only the number.", "expected": "391", "scorer": "numeric"}
+{"id": "smoke-003", "prompt": "Reply with exactly the word: pong", "expected": "pong", "scorer": "contains"}
+{"id": "smoke-004", "prompt": "What is 2 to the power of 10? Number only.", "expected": "1024", "scorer": "numeric"}
+{"id": "smoke-005", "prompt": "Name the largest planet in our solar system. One word.", "expected": "Jupiter", "scorer": "contains"}
+{"id": "smoke-006", "prompt": "In Python, what keyword defines a function? One word.", "expected": "def", "scorer": "contains"}
+{"id": "smoke-007", "prompt": "What is the boiling point of water in Celsius at sea level? Number only.", "expected": "100", "scorer": "numeric"}
+{"id": "smoke-008", "prompt": "Complete: the opposite of 'up' is ___. One word.", "expected": "down", "scorer": "contains"}
+{"id": "smoke-009", "prompt": "How many sides does a triangle have? Number only.", "expected": "3", "scorer": "numeric"}
+{"id": "smoke-010", "prompt": "What color do you get mixing blue and yellow? One word.", "expected": "green", "scorer": "contains"}
