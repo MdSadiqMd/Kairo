@@ -1,0 +1,3 @@
+# RISC Zero guest configuration for the filter proof circuit.
+[package]
+name = "kairo-filter-guest"

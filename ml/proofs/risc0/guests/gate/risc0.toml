@@ -1,0 +1,3 @@
+# RISC Zero guest configuration for the promotion gate proof circuit.
+[package]
+name = "kairo-gate-guest"

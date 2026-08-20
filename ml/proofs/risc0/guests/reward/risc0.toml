@@ -1,0 +1,4 @@
+# RISC Zero guest configuration for the reward computation proof circuit.
+# This enables the build system to find the guest crate.
+[package]
+name = "kairo-reward-guest"

@@ -1,0 +1,3 @@
+# RISC Zero guest configuration for the GRPO advantage computation proof circuit.
+[package]
+name = "kairo-grpo-guest"
