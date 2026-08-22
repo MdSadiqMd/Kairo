@@ -216,3 +216,35 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- Kairo additions ----
+# Go
+/bin/
+*.test
+*.out
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+!terraform.tfvars.example
+
+# Lifecycle orchestrator output
+outputs.json
+
+# qctl-generated deploy overlays (rendered from Terraform outputs at rollout)
+infra/kubernetes/overlays/deploy/
+infra/kubernetes/overlays/deploy-rl/
+infra/kubernetes/overlays/deploy-proofs/
+
+# Local dev secrets/keys
+api_keys.local.json
