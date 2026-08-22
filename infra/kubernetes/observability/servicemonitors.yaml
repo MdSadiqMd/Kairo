@@ -1,0 +1,73 @@
+# Prometheus Operator scrape configs. Scrapes the router,
+# the vLLM model servers, and the DCGM GPU exporter. Requires the Prometheus
+# stack CRDs. The `release: prometheus` label matches the default
+# kube-prometheus-stack serviceMonitorSelector — adjust to your install.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: router
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - kairo
+  selector:
+    matchLabels:
+      app: router
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - kairo
+  selector:
+    matchLabels:
+      app: vllm
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      # vLLM exposes native `vllm:*` metrics (num_requests_waiting,
+      # gpu_cache_usage_perc, TTFT/TPOT histograms) on the serving port.
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: "vllm:.*"
+          action: keep
+---
+# DCGM exporter runs as a DaemonSet on GPU nodes (installed by the observability
+# module). It typically lives in the monitoring/gpu-operator namespace;
+# this ServiceMonitor selects it there for GPU utilization / memory / SM metrics.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - monitoring
+      - gpu-operator
+  selector:
+    matchLabels:
+      app: nvidia-dcgm-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s

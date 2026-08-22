@@ -1,0 +1,92 @@
+# SFT Training Job template. Runs LoRA/QLoRA fine-tuning
+# via kairo-train. Create an actual job by unsuspending and setting config params.
+# The training image has torch/transformers/peft/trl — NOT the eval-runner image.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sft-training-template
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: training
+    job-type: sft
+spec:
+  suspend: true
+  backoffLimit: 1
+  activeDeadlineSeconds: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: training
+        job-type: sft
+    spec:
+      restartPolicy: Never
+      serviceAccountName: training
+      nodeSelector:
+        karpenter.sh/nodepool: gpu-training
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: trainer
+          image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/training:latest
+          args:
+            - sft
+            - --config
+            - /config/sft.yaml
+          env:
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow
+                  key: tracking-uri
+                  optional: true
+            - name: MLFLOW_EXPERIMENT_NAME
+              value: kairo-sft
+            - name: HF_HOME
+              value: /models-cache
+            - name: TRANSFORMERS_CACHE
+              value: /models-cache
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "8"
+              memory: 64Gi
+              nvidia.com/gpu: "4"
+            limits:
+              cpu: "32"
+              memory: 256Gi
+              nvidia.com/gpu: "4"
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: dshm
+              mountPath: /dev/shm
+            - name: models-cache
+              mountPath: /models-cache
+            - name: output
+              mountPath: /output
+      volumes:
+        - name: config
+          configMap:
+            name: sft-training-config
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+        - name: models-cache
+          emptyDir:
+            sizeLimit: 200Gi
+        - name: output
+          persistentVolumeClaim:
+            claimName: training-output

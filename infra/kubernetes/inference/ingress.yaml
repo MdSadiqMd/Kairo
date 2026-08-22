@@ -1,0 +1,39 @@
+# ALB ingress — the router is the ONLY public entry point.
+# Terminates TLS at the ALB, associates the WAF web ACL, and forwards to
+# the router Service on 8080. Model servers have no Ingress and stay ClusterIP.
+#
+# PLACEHOLDERS: certificate-arn, wafv2-acl-arn, and the host are per-environment
+# and injected by Terraform/qctl at rollout.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: router
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: router
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-west-2:000000000000:certificate/PLACEHOLDER
+    alb.ingress.kubernetes.io/wafv2-acl-arn: arn:aws:wafv2:us-west-2:000000000000:regional/webacl/kairo-dev/PLACEHOLDER
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-port: "8080"
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/group.name: kairo-dev
+    alb.ingress.kubernetes.io/tags: project=Kairo,env=dev,service=router
+spec:
+  ingressClassName: alb
+  rules:
+    - host: kairo-dev.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: router
+                port:
+                  number: 8080

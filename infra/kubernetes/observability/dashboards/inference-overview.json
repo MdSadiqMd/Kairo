@@ -1,0 +1,130 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "configured model-on-Cloud — Inference Overview",
+  "uid": "kairo-inference-overview",
+  "tags": ["Kairo", "inference", "vllm"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(vllm:num_requests_running, model_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "TTFT p50/p95/p99 (s)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Time to first token from vLLM histogram.",
+      "targets": [
+        { "refId": "A", "legendFormat": "p50 {{model_name}}", "expr": "histogram_quantile(0.50, sum by (le, model_name) (rate(vllm:time_to_first_token_seconds_bucket{model_name=~\"$model\"}[5m])))" },
+        { "refId": "B", "legendFormat": "p95 {{model_name}}", "expr": "histogram_quantile(0.95, sum by (le, model_name) (rate(vllm:time_to_first_token_seconds_bucket{model_name=~\"$model\"}[5m])))" },
+        { "refId": "C", "legendFormat": "p99 {{model_name}}", "expr": "histogram_quantile(0.99, sum by (le, model_name) (rate(vllm:time_to_first_token_seconds_bucket{model_name=~\"$model\"}[5m])))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "TPOT p50/p95 (s/token)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Time per output token. Compare against the Rule-1 physics floor (~27ms on g5.12xlarge TP=4); a roofline-gap alert fires above ~2x floor.",
+      "targets": [
+        { "refId": "A", "legendFormat": "p50 {{model_name}}", "expr": "histogram_quantile(0.50, sum by (le, model_name) (rate(vllm:time_per_output_token_seconds_bucket{model_name=~\"$model\"}[5m])))" },
+        { "refId": "B", "legendFormat": "p95 {{model_name}}", "expr": "histogram_quantile(0.95, sum by (le, model_name) (rate(vllm:time_per_output_token_seconds_bucket{model_name=~\"$model\"}[5m])))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "Tokens per second (generation throughput)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "gen {{model_name}}", "expr": "sum by (model_name) (rate(vllm:generation_tokens_total{model_name=~\"$model\"}[1m]))" },
+        { "refId": "B", "legendFormat": "prompt {{model_name}}", "expr": "sum by (model_name) (rate(vllm:prompt_tokens_total{model_name=~\"$model\"}[1m]))" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "Queue depth (num_requests_waiting) — KEDA scale signal",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Primary GPU scale-out trigger.",
+      "targets": [
+        { "refId": "A", "legendFormat": "waiting {{model_name}}", "expr": "sum by (model_name) (vllm:num_requests_waiting{model_name=~\"$model\"})" },
+        { "refId": "B", "legendFormat": "running {{model_name}}", "expr": "sum by (model_name) (vllm:num_requests_running{model_name=~\"$model\"})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "none" }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "title": "KV / prefix cache hit rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Prefix-cache effectiveness — a first-class routing SLO.",
+      "targets": [
+        { "refId": "A", "legendFormat": "prefix hit {{model_name}}", "expr": "sum by (model_name) (rate(vllm:prefix_cache_hits_total{model_name=~\"$model\"}[5m])) / clamp_min(sum by (model_name) (rate(vllm:prefix_cache_queries_total{model_name=~\"$model\"}[5m])), 1)" },
+        { "refId": "B", "legendFormat": "kv usage {{model_name}}", "expr": "max by (model_name) (vllm:gpu_cache_usage_perc{model_name=~\"$model\"})" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "title": "GPU utilization / memory (DCGM)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "GPU util {{gpu}}", "expr": "avg by (gpu) (DCGM_FI_DEV_GPU_UTIL)" },
+        { "refId": "B", "legendFormat": "mem used {{gpu}}", "expr": "avg by (gpu) (DCGM_FI_DEV_FB_USED)" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "title": "MBU — memory-bandwidth utilization (decode efficiency)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Achieved decode bytes/s over peak HBM bandwidth. THE decode number. Derived: (weight_bytes x gen_tok/s) / aggregate_peak_bw. Recording rule `kairo:mbu:ratio` expected from the observability module.",
+      "targets": [
+        { "refId": "A", "legendFormat": "MBU {{model_name}}", "expr": "kairo:mbu:ratio{model_name=~\"$model\"}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "title": "MFU — model FLOPs utilization (prefill/training efficiency)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "description": "Achieved FLOPs over peak. ~45% is a good GPU target. Recording rule `kairo:mfu:ratio` expected from the observability module.",
+      "targets": [
+        { "refId": "A", "legendFormat": "MFU {{model_name}}", "expr": "kairo:mfu:ratio{model_name=~\"$model\"}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 }, "overrides": [] }
+    }
+  ]
+}

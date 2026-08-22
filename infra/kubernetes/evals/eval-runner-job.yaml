@@ -1,0 +1,135 @@
+# Eval runners.
+#
+# Two-tier suites: a <5-minute smoke suite runs on a schedule (and is the
+# prerequisite for the per-cycle gate the real-time RL loop needs); the full
+# suite gates promotions and is triggered on demand (eval-candidate.yml), so it
+# ships here suspended as a template. Both invoke the kairo_ml.evals.cli module
+# (owned elsewhere) baked into the eval-runner image, against the router URL.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: smoke-eval
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: eval-runner
+    suite: smoke
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 300
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/part-of: Kairo
+            app: eval-runner
+            suite: smoke
+        spec:
+          restartPolicy: Never
+          serviceAccountName: eval-runner
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: eval-runner
+              image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/eval-runner:latest
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+              command:
+                - python
+                - -m
+                - kairo_ml.evals.cli
+                - run
+                - --suite
+                - smoke_v1
+                - --model
+                - reasoner
+                - --router-url
+                - http://router.kairo.svc.cluster.local:8080
+              env:
+                - name: EVAL_RESULTS_BUCKET
+                  value: kairo-dev-eval-results
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+---
+# Full promotion-gate eval — suspended template. eval-candidate.yml unsuspends /
+# creates a Job from this shape against a candidate model version. May land on a
+# Spot GPU batch node when the suite needs the model locally.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: full-eval-template
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: eval-runner
+    suite: full
+spec:
+  suspend: true
+  backoffLimit: 1
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: eval-runner
+        suite: full
+    spec:
+      restartPolicy: Never
+      serviceAccountName: eval-runner
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: eval-runner
+          image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/eval-runner:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - python
+            - -m
+            - kairo_ml.evals.cli
+            - run
+            - --suite
+            - full_v1
+            - --model
+            - reasoner-candidate
+            - --router-url
+            - http://router.kairo.svc.cluster.local:8080
+          env:
+            - name: EVAL_RESULTS_BUCKET
+              value: kairo-dev-eval-results
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi

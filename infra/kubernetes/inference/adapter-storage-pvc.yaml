@@ -1,0 +1,18 @@
+# Adapter storage PVC for LoRA adapters used by the candidate vLLM deployment.
+# The online RL trainer writes adapters here; the candidate vLLM reads them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: adapter-storage
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    component: adapter-storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 50Gi

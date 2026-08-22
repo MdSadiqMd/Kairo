@@ -1,0 +1,80 @@
+# Cluster-internal Services — model servers are ClusterIP,
+# never public. Service names match the in-cluster DNS in the model registry
+# (model registry): vllm-<role>.kairo.svc.cluster.local:8000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: router
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: router
+spec:
+  type: ClusterIP
+  selector:
+    app: router
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-reasoner
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: reasoner
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+    model: reasoner
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-fast
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: fast
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+    model: fast
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-verifier
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: verifier
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+    model: verifier
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

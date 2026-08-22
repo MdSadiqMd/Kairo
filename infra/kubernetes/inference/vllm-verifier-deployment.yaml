@@ -1,0 +1,139 @@
+# Verifier / reranker model — single-GPU serving.
+# Used in deep/max modes to score and rerank N candidates from the reasoner.
+# Uses a cross-encoder reranker model (BAAI/bge-reranker-v2-m3) served via vLLM's
+# scoring API (/v1/score). Small footprint (~1.5GB), fits easily on a single GPU
+# alongside other workloads, or on the gpu-inference-small NodePool.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-verifier
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    component: verifier
+    model: verifier
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: vllm
+      model: verifier
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: vllm
+        component: verifier
+        model: verifier
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: inference
+      nodeSelector:
+        karpenter.sh/nodepool: gpu-inference-small
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: vllm
+              model: verifier
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vllm
+          image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/vllm:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            # BAAI/bge-reranker-v2-m3 is a cross-encoder reranker (~568M params,
+            # ~1.5GB). vLLM serves it via the scoring API (/v1/score) which the
+            # router's verifier.py calls.
+            - name: MODEL_ID
+              value: BAAI/bge-reranker-v2-m3
+            - name: SERVED_MODEL_NAME
+              value: kairo-verifier
+            - name: TENSOR_PARALLEL_SIZE
+              value: "1"
+            # Cross-encoders process pairs; 8192 is plenty for prompt + candidate.
+            - name: MAX_MODEL_LEN
+              value: "8192"
+            # Enable vLLM's scoring task for cross-encoder reranker models.
+            - name: VLLM_TASK
+              value: score
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+            - name: HF_HOME
+              value: /models-cache
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-internal
+                  key: api-key
+                  optional: true
+          resources:
+            # Small model — conservative resource requests. The reranker is ~1.5GB;
+            # we request 1 GPU but leave headroom for the fast model to colocate
+            # on the same node if the NodePool allows it.
+            requests:
+              cpu: "2"
+              memory: 8Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: weight-cache
+              mountPath: /models-cache
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: weight-cache
+          emptyDir:
+            sizeLimit: 20Gi

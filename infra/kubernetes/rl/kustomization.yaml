@@ -1,0 +1,32 @@
+# RL / data-flywheel overlay, applied by `qctl up --with-rl` via
+# `kubectl apply -k infra/kubernetes/rl` (Phase 4). It layers
+# the live reward pipeline on top of the base inference stack: the log
+# ingestor (events -> S3 raw-events) and the reward aggregator. The per-cycle
+# eval gate is the eval-runner CronJob already in the base (evals/), so no
+# ungated online update is possible.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- log-ingestor-deployment.yaml
+- redaction-job.yaml
+- reward-aggregator.yaml
+- online-rl-trainer.yaml
+- training-rbac.yaml
+
+configMapGenerator:
+- name: kairo-zk-config
+  namespace: kairo
+  envs:
+  - zk-config.env
+- name: kairo-rl-env-config
+  namespace: kairo
+  envs:
+  - rl-env-config.env
+generatorOptions:
+  disableNameSuffixHash: true
+
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/part-of: Kairo

@@ -1,0 +1,19 @@
+# EFS StorageClass for ReadWriteMany volumes (adapter storage, shared caches).
+# The aws-efs-csi-driver handles dynamic provisioning from an EFS file system.
+# EFS file system ID is injected by qctl via a patch or configmap.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+  labels:
+    app.kubernetes.io/part-of: Kairo
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: EFS_FILE_SYSTEM_ID
+  directoryPerms: "700"
+  gidRangeStart: "1000"
+  gidRangeEnd: "2000"
+  basePath: "/kairo"
+reclaimPolicy: Retain
+volumeBindingMode: Immediate

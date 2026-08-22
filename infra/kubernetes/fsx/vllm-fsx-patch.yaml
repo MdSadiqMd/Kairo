@@ -1,0 +1,25 @@
+# Strategic-merge patch: mount the FSx weight cache into the vLLM reasoner pods
+# and point the Hugging Face cache at it. Applied only via
+# the fsx overlay, so the base deployment still runs without FSx in dev.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-reasoner
+  namespace: kairo
+spec:
+  template:
+    spec:
+      containers:
+        - name: vllm
+          env:
+            - name: HF_HOME
+              value: /mnt/weights/hf
+          volumeMounts:
+            - name: weights-fsx
+              mountPath: /mnt/weights
+              readOnly: true
+      volumes:
+        - name: weights-fsx
+          persistentVolumeClaim:
+            claimName: kairo-weights
+            readOnly: true

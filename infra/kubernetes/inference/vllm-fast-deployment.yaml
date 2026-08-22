@@ -1,0 +1,129 @@
+# Fast model — single-GPU serving.
+# The cheap-generation / MVP-dev tier: ~16GB BF16 (or ~8GB FP8) fits one A10G,
+# so tensor_parallel_size = 1 and the pod requests a single GPU on the
+# gpu-inference-small NodePool. No cross-GPU NCCL, so /dev/shm pressure is low,
+# but we keep a small in-memory /dev/shm for safety.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-fast
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    component: fast
+    model: fast
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: vllm
+      model: fast
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: vllm
+        component: fast
+        model: fast
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: inference
+      nodeSelector:
+        karpenter.sh/nodepool: gpu-inference-small
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: vllm
+              model: fast
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vllm
+          image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/vllm:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MODEL_ID
+              value: MODEL_ID_FROM_CONFIG
+            - name: SERVED_MODEL_NAME
+              value: fast
+            - name: TENSOR_PARALLEL_SIZE
+              value: "1"
+            - name: MAX_MODEL_LEN
+              value: "32768"
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+            - name: HF_HOME
+              value: /models-cache
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-internal
+                  key: api-key
+                  optional: true
+          resources:
+            requests:
+              cpu: "4"
+              memory: 24Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: 48Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: weight-cache
+              mountPath: /models-cache
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: weight-cache
+          emptyDir:
+            sizeLimit: 80Gi

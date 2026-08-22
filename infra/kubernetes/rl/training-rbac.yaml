@@ -1,0 +1,30 @@
+# RBAC for the online RL trainer to trigger candidate vLLM deployment rollouts.
+# The trainer patches the candidate deployment annotation after writing a new adapter.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployment-rollout
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["vllm-reasoner-candidate"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: training-job-deployment-rollout
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+subjects:
+  - kind: ServiceAccount
+    name: training-job
+    namespace: kairo
+roleRef:
+  kind: Role
+  name: deployment-rollout
+  apiGroup: rbac.authorization.k8s.io

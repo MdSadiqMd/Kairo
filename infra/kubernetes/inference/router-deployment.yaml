@@ -1,0 +1,103 @@
+# Router — the only public entry point. 2 warm replicas,
+# stateless, CPU-scheduled. Config comes from a ConfigMap (generated from
+# router-config.env written by qctl at deploy time) and a Secret owned by the
+# External Secrets Operator (API keys / Secrets Manager wiring).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: router
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: router
+    component: router
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: router
+        component: router
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: router
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: router
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: router
+          image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/router:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: kairo-router-config
+          volumeMounts:
+            # API keys mounted read-only as a file; the Secret is reconciled by
+            # the External Secrets Operator from Secrets Manager.
+            - name: api-keys
+              mountPath: /etc/kairo/secrets
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          # /readyz gates traffic on the model registry being loaded; /healthz is
+          # pure liveness (matches the router Dockerfile HEALTHCHECK).
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: api-keys
+          secret:
+            secretName: kairo-router-secrets
+            optional: true # dev/local applies do not block on the ESO-owned secret
+            items:
+              - key: api_keys.json
+                path: api_keys.json

@@ -1,0 +1,345 @@
+# Network boundaries for the inference plane.
+# Model rule: default-deny everything, then open only the exact edges the request
+# path needs. Only the router may call the model servers; GPU pods may not reach
+# the internet except AWS APIs (S3/ECR) over VPC endpoints.
+#
+# Requires a CNI that enforces NetworkPolicy (VPC CNI with network policy enabled,
+# or Calico/Cilium). Namespace-selector rules assume kube-system carries the
+# label `kubernetes.io/metadata.name: kube-system` (set automatically by k8s).
+
+# 1. Default deny all ingress and egress in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# 2. Every pod may resolve DNS (kube-dns / CoreDNS in kube-system).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# 3. Router ingress: accept traffic on 8080 from the ALB / ingress controller.
+# The AWS Load Balancer Controller uses target-type=ip and health-checks pods
+# directly, so we allow ingress to :8080 without a source pod selector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: router-ingress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: router
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+---
+# 4. Router egress: model servers (vLLM :8000), safety classifier (:8080), and
+# AWS APIs (DynamoDB registry, Kinesis/SQS events, Secrets Manager) on :443.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: router-egress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: router
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: vllm
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - podSelector:
+            matchLabels:
+              app: safety-classifier
+      ports:
+        - protocol: TCP
+          port: 8080
+    # AWS service endpoints (VPC interface/gateway endpoints resolve to private
+    # IPs; :443 egress is required for DynamoDB, Kinesis, SQS, Secrets Manager).
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 5. Model server ingress: ONLY the router may call vLLM. This is
+# the control that keeps the raw model server off the public path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-ingress-router-only
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: vllm
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: router
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+# 6. GPU pod egress: deny everything except S3/ECR (weight + image pulls) over
+# :443 to VPC endpoints, plus DNS (rule 2). No general internet egress from GPU
+# pods (data perimeter).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-egress-aws-only
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: vllm
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 7. Safety classifier ingress: reachable from the router only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: safety-ingress-router-only
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: safety-classifier
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: router
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# 8. Safety classifier egress: AWS APIs on :443 only (plus DNS from rule 2).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: safety-egress-aws-only
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: safety-classifier
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 9. Online RL trainer egress: vLLM candidate (eval), AWS APIs (S3, DynamoDB, SQS).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trainer-egress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: online-rl-trainer
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: vllm
+      ports:
+        - protocol: TCP
+          port: 8000
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 10. Reward aggregator egress: AWS APIs only (S3, SQS).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aggregator-egress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: reward-aggregator
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 11. Log ingestor egress: AWS APIs only (Kinesis, S3).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: log-ingestor-egress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: log-ingestor
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 12. Eval runner egress: router (eval requests), AWS APIs (S3, DynamoDB).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eval-runner-egress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: eval-runner
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: router
+      ports:
+        - protocol: TCP
+          port: 8080
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 13. Proof worker egress: AWS APIs only (SQS, DynamoDB, S3).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: proof-worker-egress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: proof-worker
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# 14. Trainer ingress from vLLM candidate (for eval mode where candidate calls trainer
+# health). Open :8080 from vllm pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: trainer-ingress
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: online-rl-trainer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: vllm
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# 15. vLLM candidate ingress: allow trainer to call for evals.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-ingress-trainer
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  podSelector:
+    matchLabels:
+      app: vllm
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: online-rl-trainer
+      ports:
+        - protocol: TCP
+          port: 8000

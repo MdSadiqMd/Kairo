@@ -1,0 +1,64 @@
+# PodDisruptionBudgets — keep minimum serving capacity during voluntary
+# disruptions (node drains, consolidation).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: router
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: router
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: router
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-reasoner
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: reasoner
+spec:
+  # Keep the warm reasoner replica up; re-warming is a multi-minute cold load.
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vllm
+      model: reasoner
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-fast
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: fast
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vllm
+      model: fast
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-verifier
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: verifier
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vllm
+      model: verifier

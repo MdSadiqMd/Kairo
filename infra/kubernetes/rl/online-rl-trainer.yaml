@@ -1,0 +1,87 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: online-rl-trainer
+  namespace: kairo
+  labels:
+    app.kubernetes.io/name: online-rl-trainer
+    app.kubernetes.io/component: training
+spec:
+  schedule: "15 */2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: online-rl-trainer
+        spec:
+          restartPolicy: Never
+          serviceAccountName: training-job
+          nodeSelector:
+            karpenter.sh/nodepool: gpu-training
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: online-rl-trainer
+              image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/training:latest
+              command: ["python", "-m", "kairo_ml.rl.online_trainer"]
+              envFrom:
+                - configMapRef:
+                    name: kairo-rl-config
+                - configMapRef:
+                    name: kairo-rl-env-config
+                    optional: true
+                - configMapRef:
+                    name: kairo-zk-config
+                    optional: true
+              env:
+                - name: ONLINE_RL_MODEL
+                  value: reasoner-candidate
+                - name: ONLINE_RL_UPDATER
+                  value: lora
+                - name: ONLINE_RL_EVAL_MODE
+                  value: real
+                - name: ONLINE_RL_BASE_MODEL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kairo-rl-config
+                      key: base_model_id
+                      optional: true
+                - name: ONLINE_RL_OUTPUT_DIR
+                  value: /tmp/online-rl/adapter
+                - name: ONLINE_RL_CANDIDATE_ENDPOINT
+                  value: http://vllm-reasoner-candidate:8000
+                - name: ONLINE_RL_BASELINE_ENDPOINT
+                  value: http://vllm-reasoner:8000
+                - name: ONLINE_RL_ADAPTER_PVC_PATH
+                  value: /adapters/candidate
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: adapter-storage
+                  mountPath: /adapters
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: 8Gi
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "8"
+                  memory: 32Gi
+                  nvidia.com/gpu: "1"
+          volumes:
+            - name: adapter-storage
+              persistentVolumeClaim:
+                claimName: adapter-storage

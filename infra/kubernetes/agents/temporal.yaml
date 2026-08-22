@@ -1,0 +1,112 @@
+# Temporal server scaffolding — AGENT PHASE, gated. Kept at replicas: 0 and
+# applied only when `enable_temporal=true`. Durable long-running agent workflows
+# run here; Step Functions covers
+# simpler fixed pipelines. Production Temporal should use the official Helm chart
+# with a persistent datastore (Aurora) — this is a placeholder shape only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-frontend
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: temporal
+    component: agent-phase
+  annotations:
+    Kairo/gated: "agent-phase"
+    Kairo/enable-flag: enable_temporal
+spec:
+  # Gated OFF until the agent phase. qctl scales this up when --with-rl / the
+  # agent phase is enabled and the Aurora datastore exists.
+  replicas: 0
+  selector:
+    matchLabels:
+      app: temporal
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: temporal
+        component: frontend
+    spec:
+      serviceAccountName: agent-worker
+      nodeSelector:
+        karpenter.sh/nodepool: cpu-system
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: temporal
+          image: temporalio/auto-setup:1.25.2
+          ports:
+            - name: grpc
+              containerPort: 7233
+          env:
+            - name: DB
+              value: postgres12
+            - name: POSTGRES_SEEDS
+              valueFrom:
+                configMapKeyRef:
+                  name: aurora-config
+                  key: cluster_endpoint
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: aurora-config
+                  key: port
+            - name: DBNAME
+              valueFrom:
+                configMapKeyRef:
+                  name: aurora-config
+                  key: database_name
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: aurora-credentials
+                  key: username
+            - name: POSTGRES_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: aurora-credentials
+                  key: password
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-frontend
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: temporal
+    component: agent-phase
+spec:
+  type: ClusterIP
+  selector:
+    app: temporal
+    component: frontend
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: grpc
+      protocol: TCP

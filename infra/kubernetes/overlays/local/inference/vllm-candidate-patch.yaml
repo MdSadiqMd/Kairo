@@ -1,0 +1,64 @@
+# Local CPU patch for vllm-reasoner-candidate deployment.
+#
+# Removes GPU requirements, uses CPU vLLM with a tiny model for local testing.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-reasoner-candidate
+  namespace: kairo
+spec:
+  template:
+    spec:
+      nodeSelector: null
+      tolerations: []
+      containers:
+        - name: vllm
+          env:
+            - name: MODEL_ID
+              value: MODEL_ID_FROM_CONFIG
+            - name: SERVED_MODEL_NAME
+              value: reasoner-candidate
+            - name: TENSOR_PARALLEL_SIZE
+              value: "1"
+            - name: MAX_MODEL_LEN
+              value: "4096"
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+            - name: HF_HOME
+              value: /models-cache
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-internal
+                  key: api-key
+                  optional: true
+            - name: ENABLE_LORA
+              value: "true"
+            - name: LORA_MODULES
+              value: "reasoner-candidate=/models/adapters/candidate"
+            - name: CANDIDATE_ADAPTER_PATH
+              value: "/models/adapters/candidate"
+            - name: BASE_MODEL_ID
+              value: MODEL_ID_FROM_CONFIG
+            - name: VLLM_DEVICE
+              value: cpu
+            - name: VLLM_DTYPE
+              value: auto
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 8Gi
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: weight-cache
+          emptyDir:
+            sizeLimit: 20Gi
+        - name: adapter-storage
+          emptyDir:
+            sizeLimit: 5Gi

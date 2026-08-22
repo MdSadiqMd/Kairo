@@ -1,0 +1,15 @@
+# FSx weight-staging resources. Applied when Terraform's
+# enable_fsx is true, AFTER the base stack:
+#
+#   kubectl apply -k infra/kubernetes/fsx
+#   kubectl -n kairo patch deployment vllm-reasoner \
+#       --patch-file infra/kubernetes/fsx/vllm-fsx-patch.yaml
+#
+# Split this way (storage via kustomize, mount via patch) so the overlay stays
+# self-contained and builds without cross-directory load restrictions, and the
+# base deployment still runs without FSx in dev.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - pv-pvc.yaml

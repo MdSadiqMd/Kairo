@@ -1,0 +1,174 @@
+# Main reasoner tensor-parallel serving.
+#
+# Each pod runs one vLLM instance sharded across ALL 4 GPUs of a single
+# g5.12xlarge (4× A10G 24GB) via --tensor-parallel-size 4: 4×24=96GB holds the
+# ~64GB BF16 weights with ~28GB left for KV cache. `replicas` is the ONE knob:
+# total_gpus = replicas × 4, and Karpenter provisions one g5.12xlarge
+# per pod (a 4-GPU pod cannot share a 4-GPU node, so one-pod-per-node falls out
+# with no anti-affinity). A NodePool `limits.nvidia.com/gpu` cap bounds the fleet.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-reasoner
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    component: reasoner
+    model: reasoner
+spec:
+  # replicas == model_replicas. qctl/kustomize overrides this; KEDA
+  # (keda-scaledobject.yaml) manages it at runtime with a warm floor.
+  replicas: 1
+  strategy:
+    # Never surge a second 4-GPU pod onto capacity we do not have; roll one at a
+    # time and lean on blue-green at the model layer for zero-downtime.
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: vllm
+      model: reasoner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: vllm
+        component: reasoner
+        model: reasoner
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+        # Adapter annotations for RL promotion tracking
+        kairo.io/adapter-uri: ""
+        kairo.io/policy-version: "0"
+    spec:
+      serviceAccountName: inference
+      # Schedule onto the single-instance-type GPU NodePool and tolerate its
+      # dedicated taint. Karpenter only launches g5.12xlarge here.
+      nodeSelector:
+        karpenter.sh/nodepool: gpu-inference-large
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      # Spread replicas across AZs where capacity allows; do not block scheduling
+      # on it (scarce GPU capacity wins over perfect spread).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: vllm
+              model: reasoner
+      # vLLM must fully load ~64GB of weights before it is killed for slow start;
+      # give NCCL/CUDA init and the weight load generous headroom.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        # The official vllm/vllm-openai image runs as root and needs its default
+        # user for CUDA/NCCL init, so we do not force runAsNonRoot here; we drop
+        # everything else (non-root where the image allows).
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vllm
+          # Custom serving image built from infra/docker/vllm.Dockerfile and
+          # pushed to ECR by build-images.yml. The entrypoint maps the env below
+          # to vLLM flags (--served-model-name, --tensor-parallel-size,
+          # --max-model-len) and NEVER enables the dev/admin endpoints.
+          image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/vllm:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MODEL_ID
+              value: MODEL_ID_FROM_CONFIG
+            - name: SERVED_MODEL_NAME
+              value: reasoner
+            # --tensor-parallel-size 4: shard across all 4 GPUs of the node.
+            - name: TENSOR_PARALLEL_SIZE
+              value: "4"
+            # Caps KV-cache VRAM; ~28GB of KV buys only ~3 concurrent 16k
+            # sequences at BF16. Lower this or set KV_CACHE_DTYPE
+            # to fp8 to raise concurrency.
+            - name: MAX_MODEL_LEN
+              value: "16384"
+            # Rust HF downloader saturates instance bandwidth on the
+            # ~64GB cold-start weight pull.
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+            - name: HF_HOME
+              value: /models-cache
+            # Optional second auth layer behind the NetworkPolicy.
+            # Provisioned by External Secrets; absent in local/dev is fine.
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-internal
+                  key: api-key
+                  optional: true
+          resources:
+            # Request == limit for GPUs — extended resources cannot be
+            # over/under-committed. 4 GPUs = the whole g5.12xlarge.
+            requests:
+              cpu: "8"
+              memory: 48Gi
+              nvidia.com/gpu: "4"
+            limits:
+              cpu: "24"
+              memory: 160Gi
+              nvidia.com/gpu: "4"
+          volumeMounts:
+            # THE #1 multi-GPU TP failure: vLLM tensor parallelism uses NCCL over
+            # shared memory, and the container default /dev/shm of 64MB makes
+            # multi-GPU startup hang or crash. Back it with an in-memory emptyDir
+            # sized >=16Gi.
+            - name: dshm
+              mountPath: /dev/shm
+            # Node-local weight cache: a pod restart on the same node skips the
+            # ~64GB re-download. emptyDir now; g5 instance-store NVMe / FSx for
+            # Lustre later.
+            - name: weight-cache
+              mountPath: /models-cache
+          # /health is green only once weights are loaded and the engine is
+          # ready. startupProbe absorbs the multi-minute cold load so liveness
+          # does not kill the pod mid-load.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+        - name: weight-cache
+          emptyDir:
+            sizeLimit: 200Gi

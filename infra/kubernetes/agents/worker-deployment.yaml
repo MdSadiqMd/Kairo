@@ -1,0 +1,99 @@
+# Agent worker scaffolding — AGENT PHASE, gated. The worker polls Temporal,
+# drives isolated sandboxes, and calls the
+# autonomy classifier before risky tool actions. Kept at replicas: 0 until the
+# agent phase; the sandbox execution pods it launches are ephemeral, default-deny
+# network, no secrets unless scoped — created per-run, not declared here.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-worker
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: agent-worker
+    component: agent-phase
+  annotations:
+    Kairo/gated: "agent-phase"
+    Kairo/enable-flag: enable_temporal
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: agent-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: agent-worker
+        component: agent-phase
+    spec:
+      # IRSA service account for ECR access and AWS SDK calls
+      serviceAccountName: agent-worker
+      nodeSelector:
+        karpenter.sh/nodepool: cpu-system
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          # Runs the durable agent runtime (kairo_ml.agent_runtime). The resident
+          # worker polls the task queue and drives isolated sandboxes with the
+          # autonomy gate before risky actions. The filesystem queue here
+          # is the local backend; Temporal (TEMPORAL_ADDRESS) is the production
+          # queue when enable_temporal is set.
+          # Image placeholder - kustomize patches this with the actual ECR URI
+          image: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/kairo/agent-worker:IMAGE_TAG
+          command:
+            - kairo-agent
+            - worker
+            - --queue-dir
+            - /var/agent/queue
+            - --state-dir
+            - /var/agent/state
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: TEMPORAL_ADDRESS
+              value: temporal-frontend.kairo.svc.cluster.local:7233
+            - name: ROUTER_URL
+              value: http://router.kairo.svc.cluster.local:8080
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: aurora-config
+                  key: region
+                  optional: true
+          volumeMounts:
+            - name: agent-work
+              mountPath: /var/agent
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: agent-work
+          emptyDir: {}

@@ -1,0 +1,61 @@
+# GPU autoscaling on serving-layer signals.
+#
+# CPU/memory is NOT a valid signal for GPU LLM serving — a saturated vLLM pod can
+# sit at low CPU while its queue grows. Scale on:
+#   1. vllm:num_requests_waiting (queue depth)   — primary scale-out trigger
+#   2. vllm:gpu_cache_usage_perc (KV-cache util)  — scale out before cache thrash
+#
+# Warm floor of 1 (scale-from-zero is not viable for interactive GPU traffic)
+# and a conservative scale-in (long stabilization) because re-warming a
+# 4-GPU pod means a multi-minute ~64GB weight load.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm-reasoner
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: reasoner
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-reasoner
+  # Warm-replica floor. maxReplicaCount = max_total_gpus(16) / TP(4).
+  minReplicaCount: 1
+  maxReplicaCount: 4
+  # Conservative scale-in: wait 10 min of low load before removing a GPU pod.
+  cooldownPeriod: 600
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 900
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 600
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120
+  triggers:
+    # Primary: scale out when queued (waiting) requests per replica exceed the
+    # "free throughput" batch zone — not at the first queued item.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc.cluster.local:9090
+        metricName: vllm_num_requests_waiting
+        query: sum(vllm:num_requests_waiting{model_name="reasoner"})
+        threshold: "4"
+        activationThreshold: "1"
+    # Secondary: scale out before the KV cache thrashes.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc.cluster.local:9090
+        metricName: vllm_gpu_cache_usage_perc
+        query: max(vllm:gpu_cache_usage_perc{model_name="reasoner"})
+        threshold: "0.85"

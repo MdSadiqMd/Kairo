@@ -1,0 +1,142 @@
+# Candidate LoRA adapter evaluation deployment.
+#
+# Serves the base model with a candidate LoRA adapter loaded for evaluation.
+# The RL loop produces candidate adapters; this deployment allows the eval
+# runner to test them before promotion to production. Uses vLLM's --enable-lora
+# feature to serve the base model + candidate adapter.
+#
+# This is separate from the production vllm-reasoner deployment to isolate
+# candidate evaluation from production traffic.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-reasoner-candidate
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    component: reasoner-candidate
+    model: reasoner-candidate
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: vllm
+      model: reasoner-candidate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: Kairo
+        app: vllm
+        component: reasoner-candidate
+        model: reasoner-candidate
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: inference
+      nodeSelector:
+        karpenter.sh/nodepool: gpu-inference-large
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vllm
+          image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/vllm:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MODEL_ID
+              value: MODEL_ID_FROM_CONFIG
+            - name: SERVED_MODEL_NAME
+              value: reasoner-candidate
+            - name: TENSOR_PARALLEL_SIZE
+              value: "4"
+            - name: MAX_MODEL_LEN
+              value: "16384"
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "1"
+            - name: HF_HOME
+              value: /models-cache
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-internal
+                  key: api-key
+                  optional: true
+            # LoRA configuration for candidate adapter
+            - name: ENABLE_LORA
+              value: "true"
+            - name: LORA_MODULES
+              value: "reasoner-candidate=/models/adapters/candidate"
+            - name: CANDIDATE_ADAPTER_PATH
+              value: "/models/adapters/candidate"
+            - name: BASE_MODEL_ID
+              value: MODEL_ID_FROM_CONFIG
+          resources:
+            # Smaller than production since only used for eval traffic
+            requests:
+              cpu: "4"
+              memory: 32Gi
+              nvidia.com/gpu: "4"
+            limits:
+              cpu: "16"
+              memory: 128Gi
+              nvidia.com/gpu: "4"
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+            - name: weight-cache
+              mountPath: /models-cache
+            - name: adapter-storage
+              mountPath: /models/adapters
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+        - name: weight-cache
+          emptyDir:
+            sizeLimit: 200Gi
+        - name: adapter-storage
+          persistentVolumeClaim:
+            claimName: adapter-storage

@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - vllm-deployment.yaml
+  - vllm-fast-deployment.yaml
+  - vllm-candidate-deployment.yaml
+  - vllm-candidate-service.yaml
+  - adapter-storage-pvc.yaml
+  - router-deployment.yaml
+  - safety-deployment.yaml
+  - service.yaml
+  - ingress.yaml

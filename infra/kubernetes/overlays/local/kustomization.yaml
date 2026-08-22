@@ -1,0 +1,460 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base/namespaces.yaml
+- ../../base/serviceaccounts.yaml
+- ../../base/networkpolicies.yaml
+- ../../inference/safety-deployment.yaml
+- ../../inference/vllm-deployment.yaml
+- ../../inference/vllm-fast-deployment.yaml
+- ../../inference/vllm-candidate-deployment.yaml
+- ../../inference/vllm-candidate-service.yaml
+- ../../inference/router-deployment.yaml
+- ../../inference/service.yaml
+- ../../inference/ingress.yaml
+- ../../evals/eval-runner-job.yaml
+- local-networkpolicies.yaml
+- model-cache-pvc.yaml
+
+images:
+- name: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/router
+  newName: host.docker.internal:4566/kairo/router
+  newTag: local
+- name: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/safety
+  newName: host.docker.internal:4566/kairo/safety
+  newTag: local
+- name: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/eval-runner
+  newName: host.docker.internal:4566/kairo/eval-runner
+  newTag: local
+- name: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/vllm
+  newName: host.docker.internal:4566/kairo/vllm-cpu
+  newTag: local
+
+secretGenerator:
+- files:
+  - api_keys.json=api-keys.json
+  name: kairo-router-secrets
+  namespace: kairo
+
+configMapGenerator:
+- literals:
+  - ROUTER_ENVIRONMENT=local
+  - ROUTER_REGISTRY_BACKEND=dynamodb
+  - ROUTER_REGISTRY_TABLE=kairo-cloud-local-model-registry
+  - ROUTER_EVENTS_BACKEND=kinesis
+  - ROUTER_EVENTS_STREAM=kairo-cloud-local-inference-events
+  - ROUTER_API_KEYS_FILE=/etc/kairo/secrets/api_keys.json
+  - ROUTER_CAPTURE_RAW_ENABLED=true
+  - ROUTER_DEFAULT_TRAINING_CONSENT=true
+  - AWS_ENDPOINT_URL=http://host.docker.internal:4566
+  - AWS_REGION=us-east-1
+  - AWS_DEFAULT_REGION=us-east-1
+  - AWS_ACCESS_KEY_ID=test
+  - AWS_SECRET_ACCESS_KEY=test
+  name: kairo-router-config
+  namespace: kairo
+- envs:
+  - model-config.env
+  name: kairo-model-config
+  namespace: kairo
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+- patch: |-
+    - op: remove
+      path: /spec/template/spec/nodeSelector
+    - op: replace
+      path: /spec/replicas
+      value: 1
+  target:
+    kind: Deployment
+    name: router
+    namespace: kairo
+- patch: |-
+    - op: remove
+      path: /spec/template/spec/nodeSelector
+    - op: replace
+      path: /spec/replicas
+      value: 1
+  target:
+    kind: Deployment
+    name: safety-classifier
+    namespace: kairo
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/securityContext
+      value:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+  target:
+    kind: Deployment
+    name: safety-classifier
+    namespace: kairo
+- patch: |-
+    - op: remove
+      path: /spec/template/spec/nodeSelector
+    - op: remove
+      path: /spec/template/spec/tolerations
+    - op: remove
+      path: /spec/template/spec/topologySpreadConstraints
+    - op: replace
+      path: /spec/template/spec/containers/0/env/0/value
+      value: MODEL_ID_FROM_CONFIG
+    - op: replace
+      path: /spec/template/spec/containers/0/env/2/value
+      value: "1"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/3/value
+      value: "2048"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_DEVICE
+        value: cpu
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_DTYPE
+        value: float16
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_CPU_KVCACHE_SPACE
+        value: "1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_CPU_OMP_THREADS_BIND
+        value: "0-1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_CPU_NUM_OF_RESERVED_CPU
+        value: "1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: MAX_NUM_SEQS
+        value: "1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: MAX_NUM_BATCHED_TOKENS
+        value: "512"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: ENFORCE_EAGER
+        value: "true"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 8Gi
+    - op: replace
+      path: /spec/template/spec/volumes/0/emptyDir/sizeLimit
+      value: 1Gi
+    - op: replace
+      path: /spec/template/spec/volumes/1
+      value:
+        name: weight-cache
+        persistentVolumeClaim:
+          claimName: local-model-cache
+  target:
+    kind: Deployment
+    name: vllm-reasoner
+    namespace: kairo
+- patch: |-
+    - op: remove
+      path: /spec/template/spec/nodeSelector
+    - op: remove
+      path: /spec/template/spec/tolerations
+    - op: remove
+      path: /spec/template/spec/topologySpreadConstraints
+    - op: replace
+      path: /spec/template/spec/containers/0/env/0/value
+      value: MODEL_ID_FROM_CONFIG
+    - op: replace
+      path: /spec/template/spec/containers/0/env/2/value
+      value: "1"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/3/value
+      value: "2048"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_DEVICE
+        value: cpu
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_DTYPE
+        value: float16
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_CPU_KVCACHE_SPACE
+        value: "1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_CPU_OMP_THREADS_BIND
+        value: "0-1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: VLLM_CPU_NUM_OF_RESERVED_CPU
+        value: "1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: MAX_NUM_SEQS
+        value: "1"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: MAX_NUM_BATCHED_TOKENS
+        value: "512"
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: ENFORCE_EAGER
+        value: "true"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 8Gi
+    - op: replace
+      path: /spec/template/spec/volumes/0/emptyDir/sizeLimit
+      value: 1Gi
+    - op: replace
+      path: /spec/template/spec/volumes/1
+      value:
+        name: weight-cache
+        persistentVolumeClaim:
+          claimName: local-model-cache
+  target:
+    kind: Deployment
+    name: vllm-fast
+    namespace: kairo
+- patch: |-
+    - op: remove
+      path: /spec/template/spec/nodeSelector
+    - op: remove
+      path: /spec/template/spec/tolerations
+    - op: replace
+      path: /spec/template/spec/containers/0/env
+      value:
+        - name: MODEL_ID
+          value: MODEL_ID_FROM_CONFIG
+        - name: SERVED_MODEL_NAME
+          value: reasoner-candidate
+        - name: TENSOR_PARALLEL_SIZE
+          value: "1"
+        - name: MAX_MODEL_LEN
+          value: "2048"
+        - name: HF_HUB_ENABLE_HF_TRANSFER
+          value: "1"
+        - name: HF_HOME
+          value: /models-cache
+        - name: VLLM_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vllm-internal
+              key: api-key
+              optional: true
+        - name: ENABLE_LORA
+          value: "true"
+        - name: BASE_MODEL_ID
+          value: MODEL_ID_FROM_CONFIG
+        - name: VLLM_DEVICE
+          value: cpu
+        - name: VLLM_DTYPE
+          value: float16
+        - name: VLLM_CPU_KVCACHE_SPACE
+          value: "1"
+        - name: VLLM_CPU_OMP_THREADS_BIND
+          value: "0-1"
+        - name: VLLM_CPU_NUM_OF_RESERVED_CPU
+          value: "1"
+        - name: MAX_NUM_SEQS
+          value: "1"
+        - name: MAX_NUM_BATCHED_TOKENS
+          value: "512"
+        - name: ENFORCE_EAGER
+          value: "true"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 8Gi
+    - op: replace
+      path: /spec/template/spec/volumes/0/emptyDir/sizeLimit
+      value: 1Gi
+    - op: replace
+      path: /spec/template/spec/volumes/1
+      value:
+        name: weight-cache
+        persistentVolumeClaim:
+          claimName: local-model-cache
+    - op: replace
+      path: /spec/template/spec/volumes/2
+      value:
+        name: adapter-storage
+        emptyDir:
+          sizeLimit: 5Gi
+  target:
+    kind: Deployment
+    name: vllm-reasoner-candidate
+    namespace: kairo
+- patch: |-
+    - op: replace
+      path: /metadata/annotations/alb.ingress.kubernetes.io~1listen-ports
+      value: '[{"HTTP":80}]'
+    - op: remove
+      path: /metadata/annotations/alb.ingress.kubernetes.io~1ssl-redirect
+    - op: remove
+      path: /metadata/annotations/alb.ingress.kubernetes.io~1certificate-arn
+    - op: remove
+      path: /metadata/annotations/alb.ingress.kubernetes.io~1wafv2-acl-arn
+    - op: replace
+      path: /metadata/annotations/alb.ingress.kubernetes.io~1group.name
+      value: kairo-local
+    - op: replace
+      path: /metadata/annotations/alb.ingress.kubernetes.io~1tags
+      value: project=Kairo,env=local,service=router
+    - op: replace
+      path: /spec/rules/0/host
+      value: kairo-local.test
+  target:
+    kind: Ingress
+    name: router
+    namespace: kairo
+- patch: |-
+    - op: remove
+      path: /spec/jobTemplate/spec/template/spec/nodeSelector
+    - op: replace
+      path: /spec/jobTemplate/spec/template/spec/containers/0/env/0/value
+      value: kairo-cloud-local-eval-results
+  target:
+    kind: CronJob
+    name: smoke-eval
+    namespace: kairo
+- patch: |-
+    - op: remove
+      path: /spec/template/spec/nodeSelector
+    - op: replace
+      path: /spec/template/spec/containers/0/env/0/value
+      value: kairo-cloud-local-eval-results
+  target:
+    kind: Job
+    name: full-eval-template
+    namespace: kairo
+
+
+replacements:
+- source:
+    fieldPath: data.REASONER_MODEL_ID
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=MODEL_ID].value
+    select:
+      kind: Deployment
+      name: vllm-reasoner
+- source:
+    fieldPath: data.REASONER_SERVED_MODEL_NAME
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=SERVED_MODEL_NAME].value
+    select:
+      kind: Deployment
+      name: vllm-reasoner
+- source:
+    fieldPath: data.REASONER_MAX_MODEL_LEN
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=MAX_MODEL_LEN].value
+    select:
+      kind: Deployment
+      name: vllm-reasoner
+- source:
+    fieldPath: data.FAST_MODEL_ID
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=MODEL_ID].value
+    select:
+      kind: Deployment
+      name: vllm-fast
+- source:
+    fieldPath: data.FAST_SERVED_MODEL_NAME
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=SERVED_MODEL_NAME].value
+    select:
+      kind: Deployment
+      name: vllm-fast
+- source:
+    fieldPath: data.FAST_MAX_MODEL_LEN
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=MAX_MODEL_LEN].value
+    select:
+      kind: Deployment
+      name: vllm-fast
+- source:
+    fieldPath: data.REASONER_MODEL_ID
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=MODEL_ID].value
+    - spec.template.spec.containers.[name=vllm].env.[name=BASE_MODEL_ID].value
+    select:
+      kind: Deployment
+      name: vllm-reasoner-candidate
+- source:
+    fieldPath: data.REASONER_MAX_MODEL_LEN
+    kind: ConfigMap
+    name: kairo-model-config
+  targets:
+  - fieldPaths:
+    - spec.template.spec.containers.[name=vllm].env.[name=MAX_MODEL_LEN].value
+    select:
+      kind: Deployment
+      name: vllm-reasoner-candidate
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/part-of: Kairo

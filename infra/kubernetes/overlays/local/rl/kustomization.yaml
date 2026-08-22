@@ -1,0 +1,136 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../../rl
+
+images:
+- name: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/log-ingestor
+  newName: host.docker.internal:4566/kairo/log-ingestor
+  newTag: local
+- name: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/eval-runner
+  newName: host.docker.internal:4566/kairo/eval-runner
+  newTag: local
+- name: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/training
+  newName: host.docker.internal:4566/kairo/training
+  newTag: local
+
+configMapGenerator:
+- name: kairo-rl-config
+  namespace: kairo
+  behavior: replace
+  literals:
+    - AWS_REGION=us-east-1
+    - AWS_DEFAULT_REGION=us-east-1
+    - AWS_ENDPOINT_URL=http://host.docker.internal:4566
+    - AWS_ACCESS_KEY_ID=test
+    - AWS_SECRET_ACCESS_KEY=test
+    - INGEST_STREAM=kairo-cloud-local-inference-events
+    - INGEST_SHARD_ID=shardId-000000000000
+    - INGEST_BUCKET=kairo-cloud-local-raw-events
+    - INGEST_PREFIX=raw-events
+    - base_model_id=Qwen/Qwen2.5-0.5B-Instruct
+    - AGGREGATOR_INPUT_URI=s3://kairo-cloud-local-redacted-events/redacted-events/
+    - AGGREGATOR_OUTPUT_URI=s3://kairo-cloud-local-redacted-events/candidates/scored.ndjson
+    - AGGREGATOR_SYNTHETIC_FEEDBACK=true
+
+patches:
+- target:
+    kind: Deployment
+    name: log-ingestor
+    namespace: kairo
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/securityContext
+      value:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+- target:
+    kind: CronJob
+    name: online-rl-trainer
+    namespace: kairo
+  patch: |-
+    - op: replace
+      path: /spec/jobTemplate/spec/template/spec/containers/0/env
+      value:
+        - name: ONLINE_RL_MODEL
+          value: reasoner-candidate
+        - name: ONLINE_RL_UPDATER
+          value: lora
+        - name: ONLINE_RL_EVAL_MODE
+          value: real
+        - name: ONLINE_RL_BASE_MODEL
+          value: Qwen/Qwen2.5-0.5B-Instruct
+        - name: ONLINE_RL_OUTPUT_DIR
+          value: /tmp/online-rl/adapter
+        - name: ONLINE_RL_CANDIDATES_URI
+          value: s3://kairo-cloud-local-redacted-events/candidates/scored.ndjson
+        - name: ONLINE_RL_OUTPUT_URI
+          value: s3://kairo-cloud-local-checkpoints/online-rl/candidate.json
+        - name: ONLINE_RL_RESULT_URI
+          value: s3://kairo-cloud-local-eval-results/online-rl/result.json
+        - name: ONLINE_RL_CANDIDATE_ENDPOINT
+          value: http://vllm-reasoner-candidate:8000
+        - name: ONLINE_RL_BASELINE_ENDPOINT
+          value: http://vllm-reasoner:8000
+        - name: HF_HOME
+          value: /tmp/hf-cache
+        - name: TRANSFORMERS_CACHE
+          value: /tmp/hf-cache
+    - op: replace
+      path: /spec/jobTemplate/spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "1"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 8Gi
+- target:
+    kind: CronJob
+    name: redaction-job
+    namespace: kairo
+  patch: |-
+    - op: replace
+      path: /spec/jobTemplate/spec/template/spec/securityContext
+      value:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+    - op: replace
+      path: /spec/jobTemplate/spec/template/spec/containers/0/command
+      value:
+        - python
+        - -m
+        - kairo_ml.data.redaction_job
+        - --input
+        - s3://kairo-cloud-local-raw-events/raw-events/
+        - --output
+        - s3://kairo-cloud-local-redacted-events/redacted-events/
+
+- target:
+    kind: CronJob
+    name: reward-aggregator
+    namespace: kairo
+  patch: |-
+    - op: replace
+      path: /spec/jobTemplate/spec/template/spec/securityContext
+      value:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/part-of: Kairo

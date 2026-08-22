@@ -1,0 +1,23 @@
+# ClusterIP service for candidate LoRA adapter evaluation.
+#
+# Internal only - accessible by eval runner for testing candidate adapters
+# before promotion to production. Not exposed externally.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-reasoner-candidate
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app: vllm
+    model: reasoner-candidate
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+    model: reasoner-candidate
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

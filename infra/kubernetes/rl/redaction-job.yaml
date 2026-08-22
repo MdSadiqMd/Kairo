@@ -1,0 +1,58 @@
+# Redaction CronJob: processes raw inference events through
+# the redaction pipeline and writes training-eligible events. Runs hourly to keep
+# the redacted-events bucket fresh for reward aggregation.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: redaction-job
+  namespace: kairo
+  labels:
+    app.kubernetes.io/name: redaction-job
+    app.kubernetes.io/component: data-pipeline
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: redaction-job
+        spec:
+          restartPolicy: Never
+          serviceAccountName: eval-runner
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: redaction
+              image: 000000000000.dkr.ecr.us-west-2.amazonaws.com/kairo/eval-runner:latest
+              command:
+                - python
+                - -m
+                - kairo_ml.data.redaction_job
+              envFrom:
+                - configMapRef:
+                    name: kairo-rl-config
+                - configMapRef:
+                    name: kairo-rl-env-config
+                    optional: true
+              env:
+                - name: REDACTION_TRAINING_OPT_IN
+                  value: "true"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "2"
+                  memory: 2Gi

@@ -1,0 +1,42 @@
+# Applied by `qctl up` via `kubectl apply -k infra/kubernetes` (Phase 3).
+# Agent-plane manifests (agents/) are intentionally excluded here — they are an
+# agent-phase concern and ship replicas:0 until then. Prometheus/KEDA/ALB
+# CRDs are installed by the observability + add-on layers before this applies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- base/namespaces.yaml
+- base/serviceaccounts.yaml
+- base/networkpolicies.yaml
+- base/secretstore.yaml
+- inference/externalsecret-router.yaml
+- inference/safety-deployment.yaml
+- inference/vllm-deployment.yaml
+- inference/vllm-fast-deployment.yaml
+- inference/vllm-candidate-deployment.yaml
+- inference/vllm-candidate-service.yaml
+- inference/adapter-storage-pvc.yaml
+- inference/router-deployment.yaml
+- inference/service.yaml
+- inference/ingress.yaml
+- inference/hpa.yaml
+- inference/keda-scaledobject.yaml
+- inference/pdb.yaml
+- observability/servicemonitors.yaml
+- observability/recording-rules.yaml
+- evals/eval-runner-job.yaml
+
+configMapGenerator:
+- envs:
+  - inference/router-config.env
+  name: kairo-router-config
+  namespace: kairo
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/part-of: Kairo

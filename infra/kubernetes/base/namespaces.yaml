@@ -1,0 +1,16 @@
+# Namespaces for the inference plane.
+# Only the `kairo` namespace is created here; observability (Prometheus/Grafana),
+# KEDA, and the NVIDIA device plugin are installed by Terraform/Helm into their
+# own namespaces and are out of scope for these application manifests.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    app.kubernetes.io/managed-by: qctl
+    # Pod Security Admission: baseline is the floor the vLLM image can meet
+    # (it runs as root but needs no privilege escalation); router/eval/agent
+    # pods run non-root and satisfy restricted.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted

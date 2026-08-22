@@ -1,0 +1,72 @@
+# Roofline efficiency recording rules + alert.
+# MBU (memory-bandwidth utilization) is THE decode-efficiency number; MFU
+# (model-FLOPs utilization) is the prefill/training number. The dashboards
+# (observability/dashboards/inference-overview.json) plot kairo:mbu:ratio and
+# kairo:mfu:ratio; these rules define them, plus the roofline-gap alert that
+# fires when achieved TPOT is persistently worse than ~2x the physics floor —
+# a config regression (dtype, batching, NCCL fallback), not load.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kairo-roofline
+  namespace: kairo
+  labels:
+    app.kubernetes.io/part-of: Kairo
+    release: prometheus
+spec:
+  groups:
+    - name: kairo.roofline.recording
+      interval: 30s
+      rules:
+        # Achieved decode bytes/s per replica: weight bytes streamed per output
+        # token * output tokens/s. weight_bytes is published as a static gauge
+        # by the model server sidecar (kairo_model_weight_bytes).
+        - record: kairo:decode_bytes_per_sec:rate
+          expr: |
+            kairo_model_weight_bytes
+              * rate(vllm:generation_tokens_total[1m])
+        # Peak aggregate HBM bandwidth per replica (GPUs * per-GPU peak),
+        # published as kairo_gpu_hbm_bytes_per_sec_peak.
+        - record: kairo:mbu:ratio
+          expr: |
+            kairo:decode_bytes_per_sec:rate
+              / on(pod) group_left kairo_gpu_hbm_bytes_per_sec_peak
+        # MFU: achieved model FLOPs/s / peak FLOPs/s. Prefill-dominated; ~45% is
+        # a good target on GPU clusters.
+        - record: kairo:mfu:ratio
+          expr: |
+            (2 * kairo_model_active_params
+               * rate(vllm:prompt_tokens_total[1m]))
+              / on(pod) group_left kairo_gpu_flops_per_sec_peak
+        # Achieved time-per-output-token (seconds) and the Rule-1 physics floor
+        # (weight bytes / aggregate bandwidth), for the roofline-gap alert.
+        - record: kairo:tpot_seconds:achieved
+          expr: |
+            rate(vllm:time_per_output_token_seconds_sum[5m])
+              / rate(vllm:time_per_output_token_seconds_count[5m])
+        - record: kairo:tpot_seconds:floor
+          expr: |
+            kairo_model_weight_bytes / kairo_gpu_hbm_bytes_per_sec_peak
+    - name: kairo.roofline.alerts
+      rules:
+        - alert: RooflineGap
+          # Achieved TPOT persistently worse than ~2x the physics floor.
+          expr: |
+            kairo:tpot_seconds:achieved
+              > 2 * kairo:tpot_seconds:floor
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Decode TPOT >2x the roofline floor on {{ $labels.pod }}"
+            description: >-
+              Config regression (wrong dtype, broken batching, NCCL fallback
+              path), not load. Compare achieved vs floor.
+        - alert: LowMBU
+          expr: kairo:mbu:ratio < 0.35
+          for: 30m
+          labels:
+            severity: info
+          annotations:
+            summary: "Decode MBU below 35% on {{ $labels.pod }}"
+            description: "Leaving decode bandwidth on the table; investigate batching/KV dtype."

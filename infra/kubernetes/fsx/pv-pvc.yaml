@@ -1,0 +1,48 @@
+# Static FSx-for-Lustre PV/PVC for weight staging. Backed
+# by the FSx CSI driver; the volumeHandle/dnsname/mountname come from the
+# fsx_lustre Terraform module outputs (fsx_file_system_id, fsx_mount_name) and
+# are patched in at rollout. ReadOnlyMany so every vLLM replica shares the same
+# hydrated weights instead of pulling from S3/HF per cold start.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fsx-weights
+provisioner: fsx.csi.aws.com
+mountOptions:
+  - flock
+parameters:
+  deploymentType: PERSISTENT_2
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kairo-weights
+  labels:
+    app.kubernetes.io/part-of: Kairo
+spec:
+  capacity:
+    storage: 2400Gi
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: fsx-weights
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: fsx.csi.aws.com
+    volumeHandle: PATCH_ME_fsx_file_system_id
+    volumeAttributes:
+      dnsname: PATCH_ME_fsx_dns_name
+      mountname: PATCH_ME_fsx_mount_name
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kairo-weights
+  namespace: kairo
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: fsx-weights
+  resources:
+    requests:
+      storage: 2400Gi
+  volumeName: kairo-weights
