@@ -1,0 +1,40 @@
+# Copy to terraform.tfvars and adjust. Env-specific values only; no secrets in VCS.
+
+region       = "us-west-2"
+project      = "Kairo"
+env          = "dev"
+service      = "platform"
+model        = "model-32b"
+cluster_name = "kairo-cloud-dev"
+name_prefix  = "kairo-cloud-dev"
+
+vpc_cidr           = "10.20.0.0/16"
+availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+single_nat_gateway = true # dev cost saving; prod uses one NAT per AZ
+
+# GPU capacity. Families drive the Karpenter NodePools.
+gpu_instance_families = ["g5", "g6", "g6e", "p5"]
+
+# The one knob for Model-32B tensor-parallel serving.
+model_replicas        = 1
+gpu_instance_type    = "g5.12xlarge"
+tensor_parallel_size = 4
+gpus_per_node        = 4
+max_total_gpus       = 16
+model_id             = "MODEL_PROVIDER/Model-32B"
+max_model_len        = 16384
+
+# Data lifecycle and hardening
+log_retention_days   = 30
+force_destroy_buckets = true # dev only — allows stop.sh --delete-data to empty buckets
+enable_hyperpod      = false
+enable_secrets_encryption = true
+
+# Access control — replace with company VPN / office egress IPs.
+allowed_cidr_blocks           = ["0.0.0.0/0"]
+eks_endpoint_public_access    = true
+eks_public_access_cidrs       = ["0.0.0.0/0"]
+
+# OpenSearch fine-grained access control master password — supply via a TF_VAR
+# environment variable or a *.auto.tfvars that is gitignored, never here.
+# opensearch_master_password = "set-via-TF_VAR_opensearch_master_password"
