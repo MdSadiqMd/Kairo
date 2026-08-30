@@ -1,0 +1,90 @@
+# Build + push service images to ECR with vulnerability scan. Runs on main;
+# images are tagged with the commit SHA so
+# deployments reference an immutable digest.
+name: build-images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC to assume the ECR push role
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [router, vllm, safety, log-ingestor, eval-runner, training, proof-worker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Resolve Dockerfile + context
+        id: img
+        run: |
+          case "${{ matrix.service }}" in
+            router)       echo "dockerfile=services/router/Dockerfile"      >> "$GITHUB_OUTPUT"; echo "context=." >> "$GITHUB_OUTPUT" ;;
+            vllm)         echo "dockerfile=infra/docker/vllm.Dockerfile"     >> "$GITHUB_OUTPUT"; echo "context=infra/docker" >> "$GITHUB_OUTPUT" ;;
+            safety)       echo "dockerfile=services/safety_classifier/Dockerfile" >> "$GITHUB_OUTPUT"; echo "context=." >> "$GITHUB_OUTPUT" ;;
+            log-ingestor) echo "dockerfile=services/log_ingestor/Dockerfile" >> "$GITHUB_OUTPUT"; echo "context=." >> "$GITHUB_OUTPUT" ;;
+            eval-runner)  echo "dockerfile=services/eval_api/Dockerfile"     >> "$GITHUB_OUTPUT"; echo "context=." >> "$GITHUB_OUTPUT" ;;
+            training)     echo "dockerfile=infra/docker/training.Dockerfile" >> "$GITHUB_OUTPUT"; echo "context=." >> "$GITHUB_OUTPUT" ;;
+            proof-worker) echo "dockerfile=infra/docker/proof-worker.Dockerfile" >> "$GITHUB_OUTPUT"; echo "context=." >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.img.outputs.context }}
+          file: ${{ steps.img.outputs.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/kairo/${{ matrix.service }}:${{ github.sha }}
+            ${{ steps.ecr.outputs.registry }}/kairo/${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      # ECR repositories are created with scanOnPush=true by Terraform; block the
+      # build if the pushed image has CRITICAL findings.
+      - name: Wait for ECR scan + gate on CRITICAL
+        run: |
+          set -euo pipefail
+          repo="kairo/${{ matrix.service }}"
+          tag="${{ github.sha }}"
+          for _ in $(seq 1 30); do
+            status="$(aws ecr describe-image-scan-findings \
+              --repository-name "${repo}" --image-id imageTag="${tag}" \
+              --query 'imageScanStatus.status' --output text 2>/dev/null || echo PENDING)"
+            [[ "${status}" == "COMPLETE" ]] && break
+            echo "scan status: ${status}; waiting..."
+            sleep 10
+          done
+          critical="$(aws ecr describe-image-scan-findings \
+            --repository-name "${repo}" --image-id imageTag="${tag}" \
+            --query 'imageScanFindingsSummary.findingSeverityCounts.CRITICAL' \
+            --output text 2>/dev/null || echo 0)"
+          echo "CRITICAL findings: ${critical}"
+          if [[ "${critical}" != "None" && "${critical}" != "0" ]]; then
+            echo "::error::${repo}:${tag} has ${critical} CRITICAL vulnerabilities"
+            exit 1
+          fi
