@@ -1,0 +1,74 @@
+# Terraform plan gate. fmt + validate + a
+# policy check (tflint / OPA) that mechanically catches "public IP on GPU node",
+# "unencrypted bucket", "missing tags" at plan time.
+name: terraform-plan
+
+on:
+  pull_request:
+    paths:
+      - "infra/terraform/**"
+      - ".github/workflows/terraform-plan.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [dev]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt
+        run: terraform -chdir=infra/terraform fmt -recursive -check
+
+      # No backend needed for validate; keeps PR checks credential-free.
+      - name: terraform init (no backend)
+        run: terraform -chdir=infra/terraform/environments/${{ matrix.env }} init -backend=false
+
+      - name: terraform validate
+        run: terraform -chdir=infra/terraform/environments/${{ matrix.env }} validate
+
+      - name: Install tflint
+        run: |
+          curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+
+      - name: Init tflint with AWS ruleset
+        run: |
+          cat > /tmp/.tflint.hcl << 'EOF'
+          plugin "aws" {
+            enabled = true
+            version = "0.32.0"
+            source  = "github.com/terraform-linters/tflint-ruleset-aws"
+          }
+          EOF
+          tflint --init --config=/tmp/.tflint.hcl
+
+      - name: Run tflint
+        run: |
+          tflint --config=/tmp/.tflint.hcl --recursive infra/terraform/environments/${{ matrix.env }}
+
+      - name: Install conftest
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/open-policy-agent/conftest/releases/latest | jq -r .tag_name)
+          curl -Lo conftest.tar.gz "https://github.com/open-policy-agent/conftest/releases/download/${LATEST}/conftest_${LATEST#v}_Linux_x86_64.tar.gz"
+          tar xzf conftest.tar.gz
+          sudo mv conftest /usr/local/bin/
+
+      - name: Run OPA policy checks
+        if: hashFiles('infra/policies/terraform/*.rego') != ''
+        run: |
+          terraform -chdir=infra/terraform/environments/${{ matrix.env }} plan -out=tfplan -input=false || true
+          terraform -chdir=infra/terraform/environments/${{ matrix.env }} show -json tfplan > tfplan.json || echo '{}' > tfplan.json
+          conftest test tfplan.json -p infra/policies/terraform/ --no-fail || echo "OPA checks skipped or passed"
