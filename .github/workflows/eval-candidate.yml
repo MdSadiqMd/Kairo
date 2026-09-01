@@ -1,0 +1,77 @@
+# Run the eval suite against a candidate model.
+# Produces an eval run id + pass flag consumed by promote-model.yml.
+name: eval-candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_version:
+        description: "Candidate model version from the model config"
+        required: true
+        type: string
+      suite:
+        description: "Eval suite id"
+        required: true
+        default: full_v1
+        type: string
+      router_url:
+        description: "Router base URL to evaluate against"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --all-packages --frozen
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_EVAL_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # scripts/run_eval_suite.py is owned elsewhere; this workflow only invokes
+      # it and captures the run id for the promotion gate.
+      - name: Run eval suite
+        id: run
+        run: |
+          uv run python scripts/run_eval_suite.py \
+            --suite "${{ inputs.suite }}" \
+            --model "${{ inputs.model_version }}" \
+            --router-url "${{ inputs.router_url }}" \
+            --output eval-report.json
+          run_id="$(jq -r '.eval_run_id' eval-report.json)"
+          passed="$(jq -r '.passed' eval-report.json)"
+          echo "eval_run_id=${run_id}" >> "$GITHUB_OUTPUT"
+          echo "passed=${passed}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload eval report
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ inputs.model_version }}
+          path: eval-report.json
+
+      - name: Gate on pass flag
+        run: |
+          if [[ "${{ steps.run.outputs.passed }}" != "true" ]]; then
+            echo "::error::eval suite ${{ inputs.suite }} did not pass for ${{ inputs.model_version }}"
+            exit 1
+          fi
+          echo "eval passed: run ${{ steps.run.outputs.eval_run_id }}"
