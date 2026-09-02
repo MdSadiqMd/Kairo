@@ -1,0 +1,60 @@
+# Gated model promotion. Flips a model version to
+# deployable in the registry ONLY after the promotion gate passes. Guarded by a
+# protected `production` environment so a human approval is required
+name: promote-model
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_version:
+        description: "Model version to promote (configured model candidate version)"
+        required: true
+        type: string
+      eval_run_id:
+        description: "Passing eval run id from eval-candidate.yml"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: promote-model
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    # Protected environment: requires the configured reviewers to approve before
+    # the job runs (the gated approval).
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --all-packages --frozen
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PROMOTE_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # scripts/promote_model.py is owned elsewhere; it re-checks every gate
+      # (core + safety evals, over-refusal, cost, latency, reward-hacking audit,
+      # privacy extraction, canary plan, rollback target, model card, manifests)
+      # and only then updates the registry.
+      - name: Promote (gated)
+        run: |
+          uv run python scripts/promote_model.py \
+            --model-version "${{ inputs.model_version }}" \
+            --eval-run-id "${{ inputs.eval_run_id }}"
