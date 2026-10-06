@@ -1681,6 +1681,16 @@ dev = [
 name = "kairo-common"
 version = "0.1.0"
 source = { editable = "libs/kairo_common" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.8.0" },
+    { name = "pydantic-settings", specifier = ">=2.4.0" },
+]
 
 [[package]]
 name = "kairo-eval-api"
